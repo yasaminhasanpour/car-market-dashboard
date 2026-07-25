@@ -55,3 +55,6 @@ goldhistory.py
 run_all.py
 tamrin.py
 New folder/
+# Ignore all databases except bama.db
+*.db
+!bama.db
