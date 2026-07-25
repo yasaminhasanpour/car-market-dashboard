@@ -21,6 +21,7 @@ env/
 # Database
 # ===========================
 *.db
+!bama.db
 *.sqlite
 *.sqlite3
 
@@ -55,6 +56,4 @@ goldhistory.py
 run_all.py
 tamrin.py
 New folder/
-# Ignore all databases except bama.db
-*.db
-!bama.db
+Build model matching list · PY
