@@ -50,10 +50,11 @@ Thumbs.db
 # ===========================
 # Files I don't want on GitHub
 # ===========================
-dash2.py
 dbBamadaily.py
 goldhistory.py
-run_all.py
 tamrin.py
 New folder/
 Build model matching list · PY
+*.db
+*.db-shm
+*.db-wal

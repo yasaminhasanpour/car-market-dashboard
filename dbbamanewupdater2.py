@@ -38,33 +38,72 @@ def get_conn():
     return sqlite3.connect(DB_FILE)
 
 def init_db(conn):
+    """
+    نکته‌ی مهم: کلید یکتای جدول (ad_id, modified_date) است، نه ad_id به‌تنهایی.
+    چون modified_date تقریباً هر بار که آگهی هنوز فعال است و دوباره دیده می‌شود
+    (چه به‌خاطر تغییر قیمت، چه رفرش/بالا آوردن آگهی توسط فروشنده) عوض می‌شود،
+    این کلید ترکیبی باعث می‌شود:
+      - تاریخچه‌ی روزانه‌ی واقعی هر آگهی حفظ شود (هر روزی که دیده شده، یک ردیف)
+      - تکرارهای بی‌فایده‌ی ناشی از هم‌پوشانی صفحه‌بندی در یک اجرای اسکریپت
+        (که modified_date در آن‌ها یکسان می‌ماند) نادیده گرفته شوند
+    با این تغییر، دیگر نیازی به اسکریپت‌های جداگانه‌ی dedup/پاکسازی تکراری‌ها نیست.
+    """
     conn.execute("""
         CREATE TABLE IF NOT EXISTS ads (
-            ad_id         TEXT PRIMARY KEY,
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            ad_id         TEXT,
             brand         TEXT,
             title         TEXT,
+            trim          TEXT,
+            color         TEXT,
             mileage       TEXT,
             modified_date TEXT,
-            price         INTEGER
+            price         INTEGER,
+            year          TEXT,
+            UNIQUE(ad_id, modified_date)
         )
     """)
+
+    # مهاجرت خودکار: اگه دیتابیس از قبل وجود داشته و ستون trim رو نداشته
+    # (مثل دیتابیس فعلی پروژه که قبل از این تغییر ساخته شده)، اضافه‌ش کن.
+    # این کار باید قبل از ساخت هر ایندکسی که به ستون trim نیاز داره انجام بشه.
+    existing_cols = [row[1] for row in conn.execute("PRAGMA table_info(ads)").fetchall()]
+    if "trim" not in existing_cols:
+        conn.execute("ALTER TABLE ads ADD COLUMN trim TEXT")
+        print("ℹ️ ستون 'trim' به جدول ads اضافه شد (مهاجرت خودکار).")
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_brand_title ON ads(brand, title)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ad_id ON ads(ad_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_brand_title_trim ON ads(brand, title, trim)")
+
     conn.commit()
 
 # ========================
 # PRICE FILTER
 # Filters both unreasonably low AND unreasonably high prices
-# (e.g. typo with an extra zero) using an IQR-based range
+# (e.g. typo with an extra zero) using an IQR-based range.
+# این‌بار در صورت وجود trim، مقایسه دقیق‌تر بر اساس brand+title+trim
+# انجام می‌شود (مثلاً پیور با پیور مقایسه می‌شود، نه با پرو).
 # ========================
 
-def is_price_valid(price, brand, title, conn):
+def is_price_valid(price, brand, title, trim, conn):
     if price is None or price <= 0:
         return False
 
-    df = pd.read_sql_query("""
-        SELECT price FROM ads
-        WHERE brand = ? AND title = ? AND price > 0
-    """, conn, params=(brand, title))
+    # اول تلاش می‌کنیم با در نظر گرفتن trim دقیق‌تر بررسی کنیم
+    df = pd.DataFrame()
+    if trim:
+        df = pd.read_sql_query("""
+            SELECT price FROM ads
+            WHERE brand = ? AND title = ? AND trim = ? AND price > 0
+        """, conn, params=(brand, title, trim))
+
+    # اگه داده‌ی کافی با trim نبود (یا trim نداشتیم)، بر اساس brand+title تنها بررسی کن
+    if len(df) < 5:
+        df = pd.read_sql_query("""
+            SELECT price FROM ads
+            WHERE brand = ? AND title = ? AND price > 0
+        """, conn, params=(brand, title))
 
     if len(df) < 5:
         return True
@@ -155,8 +194,11 @@ def parse_ad(ad):
     ad_id         = detail.get("code") or ad.get("id")
     brand         = detail.get("brand")
     title         = detail.get("title")
+    trim          = detail.get("trim")
+    color         = detail.get("color") or detail.get("body_color")
     mileage       = detail.get("mileage")
     modified_date = detail.get("modified_date")
+    year          = detail.get("year")
 
     raw_price = None
     if isinstance(ad.get("price"), dict):
@@ -168,9 +210,12 @@ def parse_ad(ad):
         "ad_id":         str(ad_id) if ad_id else None,
         "brand":         brand,
         "title":         title,
+        "trim":          trim,
+        "color":         color,
         "mileage":       mileage,
         "modified_date": modified_date,
-        "price":         normalize_price(raw_price)
+        "price":         normalize_price(raw_price),
+        "year":          str(year) if year else None,
     }
 
 # ========================
@@ -254,18 +299,19 @@ async def update_bama_daily():
                     total_presale += 1
                     continue
 
-                if not is_price_valid(row["price"], row["brand"], row["title"], conn):
+                if not is_price_valid(row["price"], row["brand"], row["title"], row["trim"], conn):
                     page_skip    += 1
                     total_skipped += 1
                     continue
 
                 cur.execute("""
                     INSERT OR IGNORE INTO ads
-                    (ad_id, brand, title, mileage, modified_date, price)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (ad_id, brand, title, trim, color, mileage, modified_date, price, year)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    row["ad_id"], row["brand"], row["title"],
-                    row["mileage"], row["modified_date"], row["price"]
+                    row["ad_id"], row["brand"], row["title"], row["trim"],
+                    row["color"], row["mileage"], row["modified_date"],
+                    row["price"], row["year"]
                 ))
 
                 if cur.rowcount == 0:
