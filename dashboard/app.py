@@ -1,5 +1,13 @@
 import streamlit as st
-import sqlite3
+import sys
+from pathlib import Path
+
+# ریشه‌ی پروژه رو به مسیر اضافه می‌کنیم تا import از core کار کنه
+# (streamlit فقط پوشه‌ی خود فایل رو می‌شناسه، نه ریشه رو)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from core.db import get_conn
+from core.filters import PRESALE_KEYWORDS, iqr_bounds
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -141,11 +149,10 @@ def icon(name, color, size=17):
     return f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="2">{icons[name]}</svg>'
 
 
-conn = sqlite3.connect("bama.db", check_same_thread=False)
+conn = get_conn(check_same_thread=False)
 
-EXCLUDED_KEYWORDS = ["پیش فروش", "پیش‌فروش", "پیشفروش", "حواله"]
-exclude_clause = " AND ".join(["title NOT LIKE ?"] * len(EXCLUDED_KEYWORDS))
-exclude_params = [f"%{kw}%" for kw in EXCLUDED_KEYWORDS]
+exclude_clause = " AND ".join(["title NOT LIKE ?"] * len(PRESALE_KEYWORDS))
+exclude_params = [f"%{kw}%" for kw in PRESALE_KEYWORDS]
 
 MIN_ADS_PER_DAY = 2
 BASELINE_DAYS = 5
@@ -238,8 +245,8 @@ df_car = pd.read_sql(
     """,
     conn, params=[brand, model] + trim_params
 )
-df_car["price"] = pd.to_numeric(df_car["price"], errors="coerce")
-df_car = df_car.dropna()
+lower, upper = iqr_bounds(df_car["price"])
+df_car = df_car[(df_car["price"] >= lower) & (df_car["price"] <= upper)]
 
 q1, q3 = df_car["price"].quantile([0.25, 0.75])
 iqr = q3 - q1
