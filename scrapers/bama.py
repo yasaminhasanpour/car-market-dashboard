@@ -1,15 +1,13 @@
 import asyncio
 import aiohttp
-import sqlite3
-import os
 import pandas as pd
+
+from core.db import get_conn
+from core.filters import PRESALE_KEYWORDS, iqr_bounds
 
 # ========================
 # CONFIG
 # ========================
-
-PROJECT_DIR = r"D:\car_project"
-DB_FILE = os.path.join(PROJECT_DIR, "bama.db")
 
 BASE_URL = "https://bama.ir/cad/api/search"
 PAGE_SIZE = 12
@@ -22,20 +20,9 @@ HEADERS = {
     "Origin": "https://bama.ir"
 }
 
-# کلمات کلیدی که نشان‌دهنده آگهی پیش‌فروش یا حواله هستند
-PRESALE_KEYWORDS = [
-    "پیش فروش",
-    "پیش‌فروش",
-    "پیشفروش",
-    "حواله",
-]
-
 # ========================
 # DATABASE
 # ========================
-
-def get_conn():
-    return sqlite3.connect(DB_FILE)
 
 def init_db(conn):
     """
@@ -108,11 +95,9 @@ def is_price_valid(price, brand, title, trim, conn):
     if len(df) < 5:
         return True
 
-    Q1    = df["price"].quantile(0.25)
-    Q3    = df["price"].quantile(0.75)
-    IQR   = Q3 - Q1
-    lower = Q1 - 2 * IQR
-    upper = Q3 + 3 * IQR  # سقف هم اضافه شد تا قیمت‌های اشتباهاً بزرگ (مثلاً یه صفر اضافه) رد بشن
+    # حد پایین Q1-2*IQR و حد بالا Q3+3*IQR (ضریب‌ها توی core/filters.py)
+    # سقف هم هست تا قیمت‌های اشتباهاً بزرگ (مثلاً یه صفر اضافه) رد بشن
+    lower, upper = iqr_bounds(df["price"])
 
     return lower <= price <= upper
 
