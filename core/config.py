@@ -6,5 +6,5 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 load_dotenv(PROJECT_ROOT / ".env")
 
-_db = Path(os.environ.get("DB_PATH", "bama.db"))
+_db = Path(os.environ.get("DB_PATH", "data/bama.db"))
 DB_PATH = _db if _db.is_absolute() else PROJECT_ROOT / _db
