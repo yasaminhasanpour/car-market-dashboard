@@ -1,66 +1,77 @@
-# -*- coding: utf-8 -*-
 """
-run_all.py — اجراکننده‌ی آپدیت دیتابیس dash2
+run_all.py - Run all data updaters in sequence.
 
-این فایل هر سه آپدیتر را به‌ترتیب اجرا می‌کند تا جدول‌های دیتابیس bama.db
-به‌روزرسانی شوند:
+Updates these tables in the project database (path comes from DB_PATH in .env):
+  1. scrapers.tether -> tether table (USDT price)
+  2. scrapers.gold   -> gold table   (18k gold price)
+  3. scrapers.bama   -> ads table    (zero-km car ads from bama.ir)
 
-  1. upteter2.py        → به‌روزرسانی جدول tether (قیمت دلار/تتر)
-  2. upgold2.py         → به‌روزرسانی جدول gold   (قیمت طلای ۱۸ عیار)
-  3. dbbamanewupdater2.py → به‌روزرسانی جدول ads   (آگهی‌های خودرو از bama.ir)
-
-اجرا:
+Usage (from the project root):
     python run_all.py
+
+A failure in one updater does not stop the others.
+The exit code is 0 only if every updater succeeded.
 """
 
 import subprocess
 import sys
-import os
+import time
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+from core.config import DB_PATH, PROJECT_ROOT
 
+# Run order matters only for readability; the updaters are independent.
 UPDATERS = [
-    "upteter2.py",            # tether
-    "upgold2.py",             # gold
-    "dbbamanewupdater2.py",   # ads
+    "scrapers.tether",
+    "scrapers.gold",
+    "scrapers.bama",
 ]
 
 
-def run_python(script: str) -> None:
-    """یک اسکریپت پایتون را به‌صورت زیرپروسس اجرا می‌کند."""
-    path = os.path.join(SCRIPT_DIR, script)
-    print("\n" + "=" * 30)
-    print(f"▶ شروع: {script}")
-    print("=" * 30)
-    result = subprocess.run([sys.executable, path])
-    if result.returncode != 0:
-        print(f"⚠️  {script} با خطا تمام شد (کد {result.returncode})")
-    else:
-        print(f"✅ {script} با موفقیت تمام شد")
-    return result.returncode
+def run_updater(module):
+    """Run one updater as `python -m <module>` from the project root."""
+    print("\n" + "=" * 60, flush=True)
+    print(f"START: {module}", flush=True)
+    print("=" * 60, flush=True)
+
+    started = time.time()
+    result = subprocess.run([sys.executable, "-m", module], cwd=PROJECT_ROOT)
+    elapsed = time.time() - started
+
+    ok = result.returncode == 0
+    status = "OK" if ok else f"FAILED (exit code {result.returncode})"
+    print(f"\n{module}: {status} in {elapsed:.0f}s", flush=True)
+    return ok, elapsed
 
 
-def main() -> None:
-    print("#" * 30)
-    print("#  شروع آپدیت کامل دیتابیس dash2  #")
-    print("#" * 30)
+def main():
+    print("=" * 60)
+    print("Full database update")
+    print(f"Database: {DB_PATH}")
+    print("=" * 60, flush=True)
 
-    if not os.path.isfile(os.path.join(SCRIPT_DIR, "bama.db")):
-        print("❌ فایل bama.db پیدا نشد!")
+    # sqlite silently creates an empty database if the file is missing,
+    # so stop here if DB_PATH points to the wrong place.
+    if not DB_PATH.is_file():
+        print(f"ERROR: database file not found: {DB_PATH}")
+        print("Check DB_PATH in .env.")
         sys.exit(1)
 
-    any_failed = False
-    for script in UPDATERS:
-        rc = run_python(script)
-        if rc != 0:
-            any_failed = True
+    results = {}
+    for module in UPDATERS:
+        results[module] = run_updater(module)
 
-    print("\n" + "#" * 30)
-    if any_failed:
-        print("#  تمام شد — برخی اسکریپت‌ها خطا داشتند  #")
-    else:
-        print("#  تمام شد — همه‌ی آپدیترها موفق بودند  #")
-    print("#" * 30)
+    print("\n" + "=" * 60)
+    print("Summary")
+    print("=" * 60)
+    for module, (ok, elapsed) in results.items():
+        print(f"  {'OK    ' if ok else 'FAILED'}  {module:<20} {elapsed:>5.0f}s")
+
+    failed = [m for m, (ok, _) in results.items() if not ok]
+    print("=" * 60)
+    if failed:
+        print(f"Done with errors in: {', '.join(failed)}")
+        sys.exit(1)
+    print("Done. All updaters succeeded.")
 
 
 if __name__ == "__main__":
